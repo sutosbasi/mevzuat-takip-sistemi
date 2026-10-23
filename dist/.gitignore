@@ -1,0 +1,25 @@
+# Python & PyInstaller
+__pycache__/
+*.py[cod]
+*$py.class
+build/
+dist/
+*.spec
+
+# Veritabanı ve Yerel Çalıştırılabilir Dosyalar
+*.db
+*.sqlite3
+*.exe
+
+# IDE & Editör
+.vscode/
+.idea/
+
+# Flutter & Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+build/
+ephemeral/
