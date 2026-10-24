@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+build/
+dist/
+*.egg-info/
+*.spec
+
+# Veritabani
+*.db
+*.sqlite
+*.sqlite3
+mevzuat_kutuphanesi.db
+
+# Musavir MCP (kopya, ayri repo)
+musavir-mcp/
+
+# Yedek dosyalar
+*.bak
+*.backup
+
+# Flutter
+mevzuat_ui/build/
+mevzuat_ui/.dart_tool/
+mevzuat_ui/.flutter-plugins
+mevzuat_ui/.flutter-plugins-dependencies
+mevzuat_ui/.packages
+mevzuat_ui/pubspec.lock
+mevzuat_ui/linux/flutter/generated_*
+mevzuat_ui/macos/Flutter/GeneratedPluginRegistrant.swift
+mevzuat_ui/windows/flutter/generated_*
+mevzuat_ui/windows/flutter/ephemeral/
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Isletim Sistemi
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Loglar
+*.log
+
+# Gecici test dosyalari
+test_api.py
+test_bulletin.py
+fix_mevzuat.py

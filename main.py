@@ -1,4 +1,5 @@
 import datetime
+import re
 from contextlib import asynccontextmanager
 from typing import List, Optional
 
@@ -16,7 +17,7 @@ from database import (
     TakipKelimesi,
 )
 from diff_engine import generate_text_diff
-from gazete_scraper import check_daily_revisions_against_library
+from gazete_scraper import check_daily_revisions_against_library, fetch_content_from_url
 from mevzuat_scraper import fetch_and_save_mevzuat
 
 # --- OTOMATİK ZAMANLAYICI (SCHEDULER) VE LIFESPAN KURULUMU ---
@@ -44,7 +45,12 @@ async def lifespan(app: FastAPI):
     # Sunucu Başlarken (Startup)
     scheduler.start()
     print("🚀 Otomatik Görev Zamanlayıcı (APScheduler) başlatıldı.")
-    scheduled_daily_check()
+
+    # İlk taramayı ayrı bir thread'de çalıştır (event loop'u bloklamasın)
+    import threading
+
+    threading.Thread(target=scheduled_daily_check, daemon=True).start()
+
     yield
     # Sunucu Kapanırken (Shutdown)
     scheduler.shutdown()
@@ -232,10 +238,28 @@ def get_revision_diff(revizyon_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Revizyon bulunamadı.")
 
     mevzuat = rev.mevzuat
-    diff_html = generate_text_diff(
-        old_text=mevzuat.icerik_html or "Metin bulunamadı.",
-        new_text=f"{rev.degisiklik_basligi}\n\n{rev.aciklama}",
+
+    # Değişiklik metnini URL'den yeniden çek
+    yeni_metin = (
+        fetch_content_from_url(rev.degisiklik_url) if rev.degisiklik_url else ""
     )
+
+    if not yeni_metin or "ayrıştırılamadı" in yeni_metin:
+        yeni_metin = (
+            f"<p>{rev.degisiklik_basligi}</p>"
+            f"<p>{rev.aciklama or ''}</p>"
+        )
+
+    # Eski metinden GÜNCELLEME header'ını çıkar (diff'te gösterme)
+    eski_metin = mevzuat.icerik_html or "<p>Metin bulunamadı.</p>"
+    eski_metin = re.sub(
+        r"<div style='background-color: #FEF3C7;.*?</div>",
+        "",
+        eski_metin,
+        flags=re.DOTALL,
+    )
+
+    diff_html = generate_text_diff(old_html=eski_metin, new_html=yeni_metin)
 
     return {
         "revizyon_id": rev.id,
