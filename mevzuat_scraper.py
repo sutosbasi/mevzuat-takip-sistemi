@@ -11,11 +11,13 @@ def clean_mevzuat_html(html_content: str) -> str:
 
     soup = BeautifulSoup(html_content, "html.parser")
 
-    # Gereksiz ve düzen bozucu öğeleri temizle
-    for tag in soup(["script", "style", "nav", "header", "footer", "iframe", "form", "button", "a", "img"]):
+    # Gereksiz etiketleri temizle
+    for tag in soup(
+        ["script", "style", "nav", "header", "footer", "iframe", "form", "button", "a", "img"]
+    ):
         tag.extract()
 
-    # Tablo yapılarını düzleştir (metin yapışmasın)
+    # Tabloları düzleştir
     for table in soup.find_all("table"):
         table.replace_with(soup.new_string("\n" + table.get_text(separator="\n") + "\n"))
 
@@ -28,19 +30,27 @@ def clean_mevzuat_html(html_content: str) -> str:
 
     raw_text = main_area.get_text(separator="\n", strip=True)
 
-    # Yapışık Maddeleri ve Fıkraları Zorunlu Satır Başlarına Kır
+    # Madde, fıkra ve bentleri zorunlu satır başlarına kır
     formatted_text = re.sub(r"(?i)(?=(?:MADDE|GEÇİCİ MADDE)\s+\d+)", "\n\n", raw_text)
     formatted_text = re.sub(r"(?i)(?=\n?\(\d+\)\s+)", "\n", formatted_text)
     formatted_text = re.sub(r"(?i)(?=\n?[a-zçğıöşü]\)\s+)", "\n", formatted_text)
 
     raw_lines = [line.strip() for line in formatted_text.splitlines() if line.strip()]
 
-    # Kopmuş "MADDE" ve "1" ifadelerini tek satırda birleştir
+    # "MADDE" ve "1" ifadelerini birleştir
     lines = []
     i = 0
     while i < len(raw_lines):
         current = raw_lines[i]
-        if any(x in current for x in ["Mevzuat Bilgi Sistemi", "T.C. CUMHURBAŞKANLIĞI", "Mevzuat Türü", "Kanunlar Fihristi"]):
+        if any(
+            x in current
+            for x in [
+                "Mevzuat Bilgi Sistemi",
+                "T.C. CUMHURBAŞKANLIĞI",
+                "Mevzuat Türü",
+                "Kanunlar Fihristi",
+            ]
+        ):
             i += 1
             continue
 
@@ -53,36 +63,137 @@ def clean_mevzuat_html(html_content: str) -> str:
         lines.append(current)
         i += 1
 
+    # HTML blokları oluştur
     clean_blocks = []
 
-    # Tipografi CSS
+    # Koyu renkli, belirgin CSS
     css_style = """
     <style>
-        .mevzuat-wrapper { font-family: 'Segoe UI', -apple-system, Roboto, sans-serif; color: #0f172a; line-height: 1.85; font-size: 14px; max-width: 960px; margin: 0 auto; padding: 20px; }
-        .m-ana-baslik { color: #0284c7; font-size: 20px; font-weight: 800; border-bottom: 3px solid #0284c7; padding-bottom: 8px; margin-top: 30px; margin-bottom: 20px; text-transform: uppercase; }
-        .m-bolum-baslik { color: #0f172a; font-size: 16px; font-weight: 800; margin-top: 32px; margin-bottom: 12px; background-color: #f1f5f9; padding: 6px 12px; border-radius: 4px; text-transform: uppercase; }
-        .m-madde-box { background-color: #eff6ff; border-left: 6px solid #1d4ed8; padding: 10px 16px; margin-top: 28px; margin-bottom: 14px; font-weight: 800; color: #1e3a8a; font-size: 15px; border-radius: 0 6px 6px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.04); }
-        .m-fikra-p { margin-bottom: 12px; text-align: justify; text-indent: 24px; color: #1e293b; margin-top: 6px; }
-        .m-bend-p { margin-left: 40px; margin-bottom: 8px; text-align: justify; color: #334155; font-weight: 600; }
+        .mevzuat-wrapper {
+            font-family: 'Segoe UI', -apple-system, Roboto, sans-serif;
+            color: #0f172a;
+            line-height: 1.85;
+            font-size: 14px;
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .m-ana-baslik {
+            color: #1e3a8a;
+            font-size: 20px;
+            font-weight: 900;
+            border-bottom: 3px solid #1d4ed8;
+            padding-bottom: 8px;
+            margin-top: 30px;
+            margin-bottom: 20px;
+            text-transform: uppercase;
+        }
+        .m-bolum-baslik {
+            color: #0f172a;
+            font-size: 16px;
+            font-weight: 900;
+            margin-top: 32px;
+            margin-bottom: 12px;
+            background-color: #e0e7ff;
+            padding: 10px 14px;
+            border-radius: 4px;
+            border-left: 5px solid #1d4ed8;
+            text-transform: uppercase;
+        }
+        .m-madde-box {
+            background-color: #dbeafe;
+            border-left: 6px solid #1d4ed8;
+            padding: 14px 18px;
+            margin-top: 28px;
+            margin-bottom: 16px;
+            font-weight: 900;
+            color: #0c1e4a;
+            font-size: 15px;
+            border-radius: 0 6px 6px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+            line-height: 1.6;
+        }
+        .m-fikra-p {
+            margin-bottom: 12px;
+            text-align: justify;
+            color: #1e293b;
+            margin-top: 6px;
+            padding-left: 8px;
+        }
+        .m-bend-p {
+            margin-left: 24px;
+            margin-bottom: 8px;
+            text-align: justify;
+            color: #334155;
+            font-weight: 500;
+            padding-left: 8px;
+        }
     </style>
     <div class="mevzuat-wrapper">
     """
     clean_blocks.append(css_style)
 
-    for text in lines:
+    # Satırları işle
+    i = 0
+    while i < len(lines):
+        text = lines[i]
         if len(text) < 2 or text.startswith("http"):
+            i += 1
             continue
 
-        if re.match(r"^(VERGİ USUL KANUNU|KANUN|TEBLİĞ|GENEL TEBLİĞ)\b", text, re.I) and len(text) < 90:
+        # Ana başlık (KANUN, TEBLİĞ vb.)
+        if (
+            re.match(
+                r"^(VERGİ USUL KANUNU|KANUN|TEBLİĞ|GENEL TEBLİĞ|YÖNETMELİK)\b",
+                text,
+                re.I,
+            )
+            and len(text) < 120
+        ):
             clean_blocks.append(f"<div class='m-ana-baslik'>{text}</div>")
-        elif re.match(r"^(MADDE|GEÇİCİ MADDE)\s+\d+", text, re.I):
-            clean_blocks.append(f"<div class='m-madde-box'>{text}</div>")
-        elif re.match(r"^(BİRİNCİ|İKİNCİ|ÜÇÜNCÜ|DÖRDÜNCÜ|BEŞİNCİ|ALTINCI|YEDİNCİ)\s+(BÖLÜM|KISIM)\b", text, re.I):
+            i += 1
+            continue
+
+        # Madde başlığı — sonraki satır kısa bir başlıksa birleştir
+        if re.match(r"^(MADDE|GEÇİCİ MADDE)\s+\d+", text, re.I):
+            combined = text
+            if i + 1 < len(lines):
+                next_text = lines[i + 1]
+                if (
+                    len(next_text) < 80
+                    and not re.match(r"^[\(\[]?\d", next_text)
+                    and not re.match(r"^[a-zçğıöşü]\)", next_text)
+                    and not re.match(
+                        r"^(MADDE|GEÇİCİ MADDE|BİRİNCİ|İKİNCİ|ÜÇÜNCÜ|DÖRDÜNCÜ|BEŞİNCİ)",
+                        next_text,
+                        re.I,
+                    )
+                ):
+                    combined = f"{text} — {next_text}"
+                    i += 1
+            clean_blocks.append(f"<div class='m-madde-box'>{combined}</div>")
+            i += 1
+            continue
+
+        # Bölüm başlığı
+        if re.match(
+            r"^(BİRİNCİ|İKİNCİ|ÜÇÜNCÜ|DÖRDÜNCÜ|BEŞİNCİ|ALTINCI|YEDİNCİ|SEKİZİNCİ|DOKUZUNCI|ONUNCU)\s+(BÖLÜM|KISIM|AYRIM)\b",
+            text,
+            re.I,
+        ):
             clean_blocks.append(f"<div class='m-bolum-baslik'>{text}</div>")
-        elif re.match(r"^([a-zçğıöşü]\)|[0-9]+\.|\(\d+\))\s+", text, re.I):
+            i += 1
+            continue
+
+        # Bent (a), b), 1., 2., (1), (2))
+        if re.match(r"^([a-zçğıöşü]\)|[0-9]+\.|\(\d+\))\s+", text, re.I):
             clean_blocks.append(f"<div class='m-bend-p'>{text}</div>")
-        else:
-            clean_blocks.append(f"<div class='m-fikra-p'>{text}</div>")
+            i += 1
+            continue
+
+        # Normal fıkra
+        clean_blocks.append(f"<div class='m-fikra-p'>{text}</div>")
+        i += 1
 
     clean_blocks.append("</div>")
     return "".join(clean_blocks)
@@ -92,13 +203,18 @@ def fetch_and_save_mevzuat(mevzuat_url: str, mevzuat_no: str, baslik: str, tur: 
     db = SessionLocal()
     try:
         session = requests.Session()
-        session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        })
+        session.headers.update(
+            {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            }
+        )
 
         target_url = mevzuat_url
         if mevzuat_no and mevzuat_no.strip() == "213":
-            target_url = "https://www.mevzuat.gov.tr/MevzuatMetin/1.5.213.htm"
+            target_url = (
+                "https://www.mevzuat.gov.tr/anasayfa/"
+                "MevzuatFihristDetayIframe?MevzuatTur=1&MevzuatNo=213&MevzuatTertip=4"
+            )
 
         res = session.get(target_url, timeout=15)
         res.encoding = res.apparent_encoding or "utf-8"

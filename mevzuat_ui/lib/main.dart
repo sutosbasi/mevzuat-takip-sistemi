@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_widget_from_html/flutter_widget_from_html.dart';
@@ -44,11 +45,27 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   bool _isLoading = false;
   final TextEditingController _kelimeController = TextEditingController();
 
+  // YENİ: Arama değişkenleri
+  final TextEditingController _aramaController = TextEditingController();
+  List<dynamic> _aramaSonuclari = [];
+  bool _aramaYapiliyor = false;
+  String _sonAramaTerimi = '';
+  Timer? _aramaDebounce;
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
     _fetchAllData();
+  }
+
+  @override
+  void dispose() {
+    _aramaDebounce?.cancel();
+    _aramaController.dispose();
+    _kelimeController.dispose();
+    _tabController.dispose();
+    super.dispose();
   }
 
   Future<void> _fetchAllData() async {
@@ -121,6 +138,56 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         }
       }
     } catch (_) {}
+  }
+
+  // YENİ: Arama fonksiyonu (debounce ile)
+  void _aramaTetikle(String q) {
+    _aramaDebounce?.cancel();
+    if (q.trim().length < 2) {
+      setState(() {
+        _aramaSonuclari = [];
+        _sonAramaTerimi = '';
+      });
+      return;
+    }
+    _aramaDebounce = Timer(const Duration(milliseconds: 400), () {
+      _aramaYap(q.trim());
+    });
+  }
+
+  Future<void> _aramaYap(String q) async {
+    if (!mounted) return;
+    setState(() {
+      _aramaYapiliyor = true;
+      _sonAramaTerimi = q;
+    });
+
+    try {
+      final res = await http.get(
+        Uri.parse('$baseUrl/api/arama?q=${Uri.encodeComponent(q)}'),
+        headers: {"Accept": "application/json"},
+      );
+
+      if (res.statusCode == 200) {
+        final data = json.decode(utf8.decode(res.bodyBytes));
+        if (mounted) {
+          setState(() {
+            _aramaSonuclari = data['results'] ?? [];
+            _aramaYapiliyor = false;
+          });
+        }
+      } else {
+        if (mounted) {
+          setState(() => _aramaYapiliyor = false);
+          _showSnackBar('Arama hatası: ${res.statusCode}');
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _aramaYapiliyor = false);
+        _showSnackBar('Arama bağlantı hatası: $e');
+      }
+    }
   }
 
   Future<void> _triggerRevisionCheck() async {
@@ -239,7 +306,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Resmî Gazete taranırken bu kelimelerin geçtiği mevzuatlar Öneriler sekmesine düşer.',
+                      'Resmî Gazete taranırken bu kelimelerin geçtiği mevzuatlar öneriler sekmesine düşer.',
                       style: TextStyle(fontSize: 12, color: Colors.grey),
                     ),
                     const SizedBox(height: 16),
@@ -249,7 +316,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                           child: TextField(
                             controller: _kelimeController,
                             decoration: const InputDecoration(
-                              hintText: 'ör. Vergi, İhale, Mal Alımı',
+                              hintText: 'Ör. Vergi, İhale, Mal Alımı',
                               border: OutlineInputBorder(),
                               contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                             ),
@@ -414,7 +481,6 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     );
   }
 
-  // --- MEVZUAT DETAY VE REVİZYON İNCELEME DİALOGU ---
   Future<void> _showMevzuatDetailDialog(int mevzuatId) async {
     showDialog(
       context: context,
@@ -471,12 +537,10 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                       Expanded(
                         child: TabBarView(
                           children: [
-                            // 1. Sekme: Mevzuatın İşlenmiş Güncel Metni
                             SingleChildScrollView(
                               padding: const EdgeInsets.all(8),
                               child: HtmlWidget(icerikHtml),
                             ),
-                            // 2. Sekme: Revizyon Listesi
                             revizyonlar.isEmpty
                                 ? const Center(child: Text('Bu mevzuat için kaydedilmiş değişiklik yok.'))
                                 : ListView.builder(
@@ -522,7 +586,6 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     );
   }
 
-  // --- KARŞILAŞTIRMA (DIFF) EKRANI ---
   Future<void> _showDiffDialog(int revizyonId) async {
     showDialog(
       context: context,
@@ -632,8 +695,147 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     );
   }
 
-  // --- KÜTÜPHANE LİSTE TAB'I (GÜNCELLENEN TIKLAMA MİMARİSİ) ---
+  // --- KÜTÜPHANE LİSTE TAB'I (ARAMA ÇUBUĞU İLE) ---
   Widget _buildLibraryTab() {
+    return Column(
+      children: [
+        // YENİ: Arama çubuğu
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: TextField(
+            controller: _aramaController,
+            onChanged: _aramaTetikle,
+            decoration: InputDecoration(
+              hintText: 'Kütüphanede ara... (en az 2 karakter)',
+              prefixIcon: const Icon(Icons.search, color: Color(0xFF1E3A8A)),
+              suffixIcon: _aramaController.text.isNotEmpty
+                  ? IconButton(
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        _aramaController.clear();
+                        setState(() {
+                          _aramaSonuclari = [];
+                          _sonAramaTerimi = '';
+                        });
+                      },
+                    )
+                  : null,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              filled: true,
+              fillColor: Colors.grey.shade50,
+            ),
+          ),
+        ),
+        // Arama yapılıyorsa sonuçları göster, yoksa normal listeyi
+        Expanded(
+          child: _aramaYapiliyor
+              ? const Center(child: CircularProgressIndicator())
+              : _sonAramaTerimi.isNotEmpty
+                  ? _buildAramaSonuclari()
+                  : _buildMevzuatListesi(),
+        ),
+      ],
+    );
+  }
+
+  // YENİ: Arama sonuçlarını göster
+  Widget _buildAramaSonuclari() {
+    if (_aramaSonuclari.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.search_off, size: 64, color: Colors.grey.shade400),
+            const SizedBox(height: 16),
+            Text(
+              '"$_sonAramaTerimi" için sonuç bulunamadı.',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Farklı bir anahtar kelime deneyin.',
+              style: TextStyle(color: Colors.grey),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      itemCount: _aramaSonuclari.length,
+      itemBuilder: (context, index) {
+        final item = _aramaSonuclari[index];
+        final int mevzuatId = item['id'];
+        final bool baslikEslesme = item['baslik_eslesme'] ?? false;
+        final String snippet = item['snippet'] ?? '';
+
+        return Card(
+          elevation: 2,
+          margin: const EdgeInsets.only(bottom: 10),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: () => _showMevzuatDetailDialog(mevzuatId),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      if (baslikEslesme)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.green.shade100,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            'Başlıkta eşleşme',
+                            style: TextStyle(fontSize: 10, color: Colors.green.shade900, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          item['tur'] ?? 'Mevzuat',
+                          style: TextStyle(fontSize: 10, color: Colors.blue.shade900, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    item['baslik'] ?? '',
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                  ),
+                  if (snippet.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      snippet,
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade700, fontStyle: FontStyle.italic),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // YENİ: Normal mevzuat listesi (eski _buildLibraryTab içeriği)
+  Widget _buildMevzuatListesi() {
     if (_mevzuatlar.isEmpty) {
       return const Center(child: Text('Kütüphanede henüz mevzuat yok.'));
     }
@@ -648,7 +850,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         return Card(
           elevation: 2,
           margin: const EdgeInsets.only(bottom: 10),
-          clipBehavior: Clip.antiAlias, // Tıklama efekti için
+          clipBehavior: Clip.antiAlias,
           child: InkWell(
             onTap: () => _showMevzuatDetailDialog(mevzuatId),
             child: Padding(
@@ -729,7 +931,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
             ),
             const SizedBox(height: 8),
             const Text(
-              'Sağ üstteki Ayarlar (⚙️) simgesinden takip kelimelerinizi kontrol edebilirsiniz.',
+              'Sağ üstteki Ayarlar simgesinden takip kelimelerinizi kontrol edebilirsiniz.',
               style: TextStyle(color: Colors.grey),
             ),
           ],

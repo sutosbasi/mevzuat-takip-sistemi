@@ -22,7 +22,6 @@ from mevzuat_scraper import fetch_and_save_mevzuat
 
 # --- OTOMATİK ZAMANLAYICI (SCHEDULER) VE LIFESPAN KURULUMU ---
 scheduler = BackgroundScheduler()
-# Her 2 saatte bir otomatik tarama yapar
 scheduler.add_job(
     lambda: check_daily_revisions_against_library(), "interval", hours=2
 )
@@ -42,17 +41,14 @@ def scheduled_daily_check():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI Modern Yaşam Döngüsü Yöneticisi."""
-    # Sunucu Başlarken (Startup)
     scheduler.start()
     print("🚀 Otomatik Görev Zamanlayıcı (APScheduler) başlatıldı.")
 
-    # İlk taramayı ayrı bir thread'de çalıştır (event loop'u bloklamasın)
     import threading
 
     threading.Thread(target=scheduled_daily_check, daemon=True).start()
 
     yield
-    # Sunucu Kapanırken (Shutdown)
     scheduler.shutdown()
     print("🛑 Otomatik Görev Zamanlayıcı durduruldu.")
 
@@ -63,7 +59,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# --- TÜM BAĞLANTILARA (CORS) İZİN VER ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -145,6 +140,80 @@ def list_library_mevzuat(
             for m in mevzuatlar
         ],
     }
+
+
+# --- ARAMA UÇ NOKTASI (mevzuat/{id} ile çakışmasın diye /api/arama) ---
+
+
+@app.get("/api/arama")
+def search_mevzuat(
+    q: str,
+    tur: Optional[str] = None,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+):
+    """Kütüphanedeki mevzuatlarda başlık ve içerik araması yapar."""
+    if not q or len(q.strip()) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Arama terimi en az 2 karakter olmalıdır.",
+        )
+
+    query_str = q.strip().lower()
+
+    query = db.query(Mevzuat).filter(
+        (Mevzuat.baslik.ilike(f"%{query_str}%"))
+        | (Mevzuat.icerik_html.ilike(f"%{query_str}%"))
+    )
+
+    if tur:
+        query = query.filter(Mevzuat.tur == tur)
+
+    mevzuatlar = query.limit(limit).all()
+
+    results = []
+    for m in mevzuatlar:
+        baslik_eslesme = query_str in m.baslik.lower()
+
+        snippet = ""
+        if m.icerik_html:
+            icerik_lower = m.icerik_html.lower()
+            idx = icerik_lower.find(query_str)
+            if idx != -1:
+                start = max(0, idx - 100)
+                end = min(len(m.icerik_html), idx + 200)
+                snippet = m.icerik_html[start:end]
+                snippet = re.sub(r"<[^>]+>", " ", snippet)
+                snippet = re.sub(r"\s+", " ", snippet).strip()
+                snippet = f"...{snippet}..."
+
+        results.append(
+            {
+                "id": m.id,
+                "mevzuat_no": m.mevzuat_no,
+                "baslik": m.baslik,
+                "tur": m.tur,
+                "mevzuat_url": m.mevzuat_url,
+                "son_guncelleme": (
+                    m.son_guncelleme.strftime("%Y-%m-%d %H:%M")
+                    if m.son_guncelleme
+                    else "-"
+                ),
+                "baslik_eslesme": baslik_eslesme,
+                "snippet": snippet,
+            }
+        )
+
+    results.sort(key=lambda x: (not x["baslik_eslesme"], x["baslik"]))
+
+    return {
+        "query": q,
+        "total": len(results),
+        "results": results,
+    }
+
+
+# --- TEK MEVZUAT DETAY (arama endpoint'inden SONRA gelmeli) ---
 
 
 @app.get("/api/mevzuat/{mevzuat_id}")
@@ -239,7 +308,6 @@ def get_revision_diff(revizyon_id: int, db: Session = Depends(get_db)):
 
     mevzuat = rev.mevzuat
 
-    # Değişiklik metnini URL'den yeniden çek
     yeni_metin = (
         fetch_content_from_url(rev.degisiklik_url) if rev.degisiklik_url else ""
     )
@@ -250,7 +318,6 @@ def get_revision_diff(revizyon_id: int, db: Session = Depends(get_db)):
             f"<p>{rev.aciklama or ''}</p>"
         )
 
-    # Eski metinden GÜNCELLEME header'ını çıkar (diff'te gösterme)
     eski_metin = mevzuat.icerik_html or "<p>Metin bulunamadı.</p>"
     eski_metin = re.sub(
         r"<div style='background-color: #FEF3C7;.*?</div>",
@@ -356,5 +423,4 @@ def convert_suggestion_to_mevzuat(
 if __name__ == "__main__":
     import uvicorn
 
-    # string "main:app" yerine doğrudan app nesnesini veriyoruz (.exe içinde modül arama hatasını çözer)
     uvicorn.run(app, host="127.0.0.1", port=8000, reload=False)

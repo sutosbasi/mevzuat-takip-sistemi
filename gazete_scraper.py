@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import asyncio
 import datetime
 import re
@@ -185,6 +186,53 @@ def fetch_daily_bulletin_sync(target_date):
         return asyncio.run(_fetch_daily_bulletin_async(target_date))
 
 
+# Değişiklik ifadeleri: bir belgenin mevcut mevzuatı değiştirip değiştirmediğini anlamak için
+DEGISIKLIK_IFADELERI = [
+    "değişiklik yapılmasına",
+    "değişiklik yapılması",
+    "değişikliği yapılmasına",
+    "değiştirilmesine",
+    "değiştirilmesi",
+    "yürürlükten kaldırılmasına",
+    "yürürlükten kaldırılması",
+    "iptaline",
+    "iptali",
+    "eklenmesine",
+    "eklenmesi",
+    "dair kanun",
+    "dair tebliğ",
+    "dair yönetmelik",
+]
+
+
+def _tur_eslesiyor(kutuphane_turu: str, rg_turu: str) -> bool:
+    """Kütüphanedeki tür ile Resmî Gazete'deki türün uyumlu olup olmadığını kontrol eder."""
+    kt = (kutuphane_turu or "").lower().strip()
+    rt = (rg_turu or "").lower().strip()
+
+    if not kt or not rt:
+        return True  # Tür bilgisi yoksa esnek davran
+
+    # Tam eşleşme
+    if kt == rt:
+        return True
+
+    # Kısmi eşleşme (birbirini içeriyorsa)
+    if kt in rt or rt in kt:
+        return True
+
+    # "Diğer" türü her zaman esnek
+    if kt == "diğer" or rt == "diğer":
+        return True
+
+    return False
+
+
+def _degisiklik_ifadesi_var(baslik_lower: str) -> bool:
+    """Başlıkta değişiklik ifadesi olup olmadığını kontrol eder."""
+    return any(ifade in baslik_lower for ifade in DEGISIKLIK_IFADELERI)
+
+
 def check_daily_revisions_against_library(days_back: int = 15):
     db = SessionLocal()
     library_items = db.query(Mevzuat).all()
@@ -229,55 +277,79 @@ def check_daily_revisions_against_library(days_back: int = 15):
             rg_title_normalized = normalize_metin(rg_title)
             rg_title_lower = rg_title.lower()
 
-            # A) Kütüphanedeki mevzuatlarla eşleştirme
+            # ---------------------------------------------------------
+            # A) Kütüphanedeki mevzuatlarla REVİZYON eşleştirmesi
+            #    Kural: Aynı tür + (başlık veya no eşleşmesi) + değişiklik ifadesi
+            # ---------------------------------------------------------
             for m in library_items:
                 clean_title = m.baslik.lower().strip()
-                if clean_title in rg_title_lower or (
-                    m.mevzuat_no and m.mevzuat_no in rg_title
-                ):
-                    exists = (
-                        db.query(MevzuatRevizyon)
-                        .filter(MevzuatRevizyon.degisiklik_url == full_url)
-                        .first()
-                    )
-                    if not exists and full_url not in session_added_urls:
-                        new_content_html = fetch_content_from_url(full_url)
-                        new_rev = MevzuatRevizyon(
-                            mevzuat_id=m.id,
-                            resmi_gazete_tarihi=datetime.datetime.combine(
-                                target_date, datetime.time()
-                            ),
-                            resmi_gazete_sayi=item.sayi,
-                            degisiklik_basligi=rg_title,
-                            degisiklik_url=full_url,
-                            aciklama=(
-                                f"{target_date.strftime('%d.%m.%Y')} tarihli "
-                                f"Resmî Gazete'de yayımlanan değişiklik. (Tür: {tur})"
-                            ),
-                        )
-                        db.add(new_rev)
-                        update_header = (
-                            f"<div style='background-color: #FEF3C7; padding: 10px; "
-                            f"border-left: 4px solid #D97706; margin-bottom: 12px;'>"
-                            f"<b>[GÜNCELLEME: {target_date.strftime('%d.%m.%Y')} - {rg_title}]</b></div>"
-                        )
-                        m.icerik_html = (
-                            update_header
-                            + new_content_html
-                            + "<hr style='margin: 20px 0;'/>"
-                            + (m.icerik_html or "")
-                        )
-                        m.son_guncelleme = datetime.datetime.combine(
-                            target_date, datetime.time()
-                        )
-                        total_rev_count += 1
-                        session_added_urls.add(full_url)
-                        print(f"      🔄 Revizyon: {rg_title[:60]}...")
-                        revizyon_bildir(
-                            m.baslik, rg_title, target_date.strftime("%d.%m.%Y")
-                        )
+                kutuphane_turu = m.tur or ""
 
-            # B) Takip kelimeleriyle eşleştirme
+                # Tür kontrolü (Kanun → Kanun, Tebliğ → Tebliğ)
+                if not _tur_eslesiyor(kutuphane_turu, tur):
+                    continue
+
+                # Başlık veya mevzuat no eşleşmesi
+                baslik_eslesiyor = clean_title and clean_title in rg_title_lower
+                no_eslesiyor = bool(m.mevzuat_no and m.mevzuat_no in rg_title)
+
+                if not (baslik_eslesiyor or no_eslesiyor):
+                    continue
+
+                # Değişiklik ifadesi var mı? (yoksa bu bir revizyon değil, yeni mevzuat)
+                if not _degisiklik_ifadesi_var(rg_title_lower):
+                    # Başlık eşleşse bile değişiklik ifadesi yoksa atla
+                    # (örneğin "Vergi Usul Kanunu Genel Tebliği" → Kanun revizyonu DEĞİL)
+                    continue
+
+                exists = (
+                    db.query(MevzuatRevizyon)
+                    .filter(MevzuatRevizyon.degisiklik_url == full_url)
+                    .first()
+                )
+
+                if not exists and full_url not in session_added_urls:
+                    new_content_html = fetch_content_from_url(full_url)
+                    new_rev = MevzuatRevizyon(
+                        mevzuat_id=m.id,
+                        resmi_gazete_tarihi=datetime.datetime.combine(
+                            target_date, datetime.time()
+                        ),
+                        resmi_gazete_sayi=item.sayi,
+                        degisiklik_basligi=rg_title,
+                        degisiklik_url=full_url,
+                        aciklama=(
+                            f"{target_date.strftime('%d.%m.%Y')} tarihli "
+                            f"Resmî Gazete'de yayımlanan değişiklik. (Tür: {tur})"
+                        ),
+                    )
+                    db.add(new_rev)
+
+                    update_header = (
+                        f"<div style='background-color: #FEF3C7; padding: 10px; "
+                        f"border-left: 4px solid #D97706; margin-bottom: 12px;'>"
+                        f"<b>[GÜNCELLEME: {target_date.strftime('%d.%m.%Y')} - {rg_title}]</b></div>"
+                    )
+                    m.icerik_html = (
+                        update_header
+                        + new_content_html
+                        + "<hr style='margin: 20px 0;'/>"
+                        + (m.icerik_html or "")
+                    )
+                    m.son_guncelleme = datetime.datetime.combine(
+                        target_date, datetime.time()
+                    )
+                    total_rev_count += 1
+                    session_added_urls.add(full_url)
+                    print(f"      🔄 Revizyon: [{tur}] {rg_title[:60]}...")
+                    revizyon_bildir(
+                        m.baslik, rg_title, target_date.strftime("%d.%m.%Y")
+                    )
+
+            # ---------------------------------------------------------
+            # B) YENİ MEVZUAT ÖNERİSİ
+            #    Kural: Mevzuat türünde + takip kelimesi eşleşmesi
+            # ---------------------------------------------------------
             if tur not in MEVZUAT_TURLERI:
                 continue
 
@@ -285,6 +357,7 @@ def check_daily_revisions_against_library(days_back: int = 15):
                 if kw in rg_title_normalized:
                     if full_url in session_added_urls:
                         continue
+
                     in_lib = (
                         db.query(Mevzuat)
                         .filter(Mevzuat.mevzuat_url == full_url)
@@ -295,6 +368,7 @@ def check_daily_revisions_against_library(days_back: int = 15):
                         .filter(MevzuatOnerisi.url == full_url)
                         .first()
                     )
+
                     if not in_lib and not in_sug:
                         new_sug = MevzuatOnerisi(
                             baslik=f"[{tur}] {rg_title} ({target_date.strftime('%d.%m.%Y')})",
