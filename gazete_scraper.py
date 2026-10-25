@@ -19,6 +19,8 @@ from database import (
     TakipKelimesi,
 )
 
+from bildirim import tarama_ozeti_bildir, revizyon_bildir
+
 
 # ============================================================
 # YARDIMCI FONKSİYONLAR
@@ -67,13 +69,12 @@ def baslik_temizle(baslik: str) -> str:
 
     temiz = baslik
 
-    # Bozuk / görünmez karakterleri kaldır
     bozuk_karakterler = [
-        "\u00ad",  # soft hyphen
-        "\u200b",  # zero width space
-        "\u200c",  # zero width non-joiner
-        "\u200d",  # zero width joiner
-        "\ufeff",  # BOM
+        "\u00ad",
+        "\u200b",
+        "\u200c",
+        "\u200d",
+        "\ufeff",
         "",
         "",
         "Â",
@@ -81,11 +82,9 @@ def baslik_temizle(baslik: str) -> str:
     for k in bozuk_karakterler:
         temiz = temiz.replace(k, "")
 
-    # Başındaki –, —, -, : ve boşlukları temizle
     temiz = re.sub(r"^[\–\—\-\:\s]+", "", temiz)
     temiz = temiz.strip()
 
-    # PDF görüntüle gibi anlamsız başlıkları atla
     if temiz.lower() in ("pdf görüntüle", "pdf", ""):
         return ""
 
@@ -96,7 +95,7 @@ MEVZUAT_TURLERI = {"Kanun", "Yönetmelik", "Tebliğ", "Sirküler", "Genelge", "K
 
 
 # ============================================================
-# İÇERİK ÇEKME (DÜZELTİLDİ: kelimeler artık bitişik değil)
+# İÇERİK ÇEKME
 # ============================================================
 
 def fetch_content_from_url(url: str) -> str:
@@ -106,7 +105,6 @@ def fetch_content_from_url(url: str) -> str:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
         res = requests.get(url, headers=headers, timeout=15)
-        # UTF-8 zorlamak yerine apparent_encoding kullan (Türkçe karakterler için)
         res.encoding = res.apparent_encoding or "utf-8"
 
         soup = BeautifulSoup(res.text, "html.parser")
@@ -123,9 +121,7 @@ def fetch_content_from_url(url: str) -> str:
         for p in main_body.find_all(
             ["p", "div", "tr", "td", "h1", "h2", "h3", "h4"]
         ):
-            # ÖNEMLİ: separator=" " ile alt etiketlerin metinlerini boşlukla birleştir
             text = p.get_text(separator=" ", strip=True)
-            # Çoklu boşlukları tek boşluğa indir
             text = re.sub(r"\s+", " ", text).strip()
 
             if (
@@ -134,7 +130,6 @@ def fetch_content_from_url(url: str) -> str:
                 and not text.startswith("http")
                 and "resmigazete.gov.tr" not in text
             ):
-                # Madde / bölüm başlıkları
                 if re.match(
                     r"^(MADDE|GEÇİCİ MADDE|BİRİNCİ BÖLÜM|İKİNCİ BÖLÜM|ÜÇÜNCÜ BÖLÜM|"
                     r"DÖRDÜNCÜ BÖLÜM|BEŞİNCİ BÖLÜM|ALTINCI BÖLÜM|KARAR)\b",
@@ -179,7 +174,6 @@ def fetch_daily_bulletin_sync(target_date):
         loop = None
 
     if loop and loop.is_running():
-        # Zaten çalışan bir event loop var (FastAPI/uvicorn içindeyiz)
         import concurrent.futures
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
@@ -279,6 +273,9 @@ def check_daily_revisions_against_library(days_back: int = 15):
                         total_rev_count += 1
                         session_added_urls.add(full_url)
                         print(f"      🔄 Revizyon: {rg_title[:60]}...")
+                        revizyon_bildir(
+                            m.baslik, rg_title, target_date.strftime("%d.%m.%Y")
+                        )
 
             # B) Takip kelimeleriyle eşleştirme
             if tur not in MEVZUAT_TURLERI:
@@ -322,4 +319,9 @@ def check_daily_revisions_against_library(days_back: int = 15):
         db.close()
 
     print(f"✅ Tarama bitti: {total_rev_count} revizyon, {total_sug_count} öneri")
+
+    # Tarama özeti bildirimi gönder
+    if total_rev_count > 0 or total_sug_count > 0:
+        tarama_ozeti_bildir(total_rev_count, total_sug_count)
+
     return total_rev_count + total_sug_count
